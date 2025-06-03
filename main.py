@@ -1,6 +1,5 @@
 import os
 from pathlib import Path
-import random
 from functools import partial
 
 from tqdm import tqdm
@@ -30,6 +29,7 @@ from utils import (
 )
 
 
+@partial(jax.jit, static_argnames=('num_classes',))
 def augment_labels(y: jax.Array, t: jax.Array, num_classes: int) -> jax.Array:
     """augment the labels for the unified gating + classifier model
 
@@ -56,18 +56,17 @@ def calculate_loss_dirichlet_prior(
     model: nnx.Module,
     x: jax.Array,
     num_classes: int,
-    dirichlet_concentration: float = 1.
+    dirichlet_concentration: list[float]
 ) -> jax.Array:
-    """calculate the prior imposed on the prediction of the classifier. The prior is
-    assumed to be a symmetric Dirichlet distribution. The purpose of the prior loss is
-    to control the coverage by changing the Dirichlet concentration parameters
+    """calculate the prior imposed on the prediction of the classifier. The purpose of
+    the prior loss is to control the coverage by changing the Dirichlet concentration
 
     Args:
         model: the 'unified' model whose output consists of the prediction of the
     classifier and the correction of human experts.
         x: the input samples
         num_classes: the number of classes in the classification task
-        dirichlet_concentration: a positive float value
+        dirichlet_concentration: a (num_experts + 1)-dimensional positive vector
 
     Returns:
         loss_prior:
@@ -140,7 +139,7 @@ def loss_fn(
     y_augmented: jax.Array,
     which_loss: str,
     num_classes: int,
-    dirichlet_concentration: float,
+    dirichlet_concentration: list[float],
     dataset_length: int
 ) -> jax.Array:
     """a wrapper to calculate the loss
@@ -176,7 +175,6 @@ def loss_fn(
         case _:
             raise ValueError(f'The loss function must be either \'softmax\' or \'one_vs_all\'. Found {which_loss}')
 
-
     return loss
 
 
@@ -195,7 +193,7 @@ def train_step(
     optimizer: nnx.Optimizer,
     which_loss: str,
     num_classes: int,
-    dirichlet_concentration: float,
+    dirichlet_concentration: list[float],
     dataset_length: int
 ) -> tuple[nnx.Optimizer, jax.Array]:
     """
@@ -268,7 +266,7 @@ def train(
 
 
 def evaluate(
-    dataloader: grain.DataLoader,
+    data_loader: grain.DatasetIterator,
     state: nnx.Optimizer,
     cfg: DictConfig
 ) -> tuple[float, float, float]:
@@ -280,16 +278,16 @@ def evaluate(
 
     state.model.eval()
 
-    for samples in tqdm(
-        iterable=dataloader,
+    for _ in tqdm(
+        iterable=range(cfg.dataset.length.test//cfg.training.batch_size),
         desc='evaluate',
-        total=cfg.dataset.length.test//cfg.training.batch_size + 1,
         ncols=80,
         leave=False,
         position=2,
         colour='blue',
         disable=not cfg.data_loading.progress_bar
     ):
+        samples = next(data_loader)
         x = jnp.asarray(a=samples['image'], dtype=jnp.float32)  # input samples
         y = jnp.asarray(a=samples['ground_truth'], dtype=jnp.int32)  # true labels (batch,)
         t = jnp.asarray(a=samples['label'], dtype=jnp.int32)  # annotated labels (batch, num_experts)
@@ -362,7 +360,7 @@ def main(cfg: DictConfig) -> None:
     # region MODELS
     model = hydra.utils.instantiate(config=cfg.model)(
         num_classes=cfg.dataset.num_classes + len(cfg.dataset.train_files),
-        rngs=nnx.Rngs(jax.random.PRNGKey(seed=random.randint(a=0, b=100))),
+        rngs=nnx.Rngs(jax.random.PRNGKey(seed=cfg.training.seed)),
         dtype=eval(cfg.jax.dtype)
     )
 
@@ -394,8 +392,8 @@ def main(cfg: DictConfig) -> None:
     mlflow.set_tracking_uri(uri=cfg.experiment.tracking_uri)
     mlflow.set_experiment(experiment_name=cfg.experiment.name)
     mlflow.disable_system_metrics_logging()
-    mlflow.set_system_metrics_sampling_interval(interval=600)
-    mlflow.set_system_metrics_samples_before_logging(samples=1)
+    # mlflow.set_system_metrics_sampling_interval(interval=600)
+    # mlflow.set_system_metrics_samples_before_logging(samples=1)
 
     # create a directory for storage (if not existed)
     if not os.path.exists(path=cfg.experiment.logdir):
@@ -405,7 +403,7 @@ def main(cfg: DictConfig) -> None:
     # enable mlflow tracking
     with mlflow.start_run(
         run_id=cfg.experiment.run_id,
-        log_system_metrics=True
+        log_system_metrics=False
     ) as mlflow_run:
         # append run id into the artifact path
         ckpt_dir = os.path.join(
@@ -439,43 +437,45 @@ def main(cfg: DictConfig) -> None:
                     args=ocp.args.StandardRestore(item=nnx.state(state.model))
                 )
 
-                state = checkpoint.state
+                nnx.update(state.model, checkpoint)
 
                 del checkpoint
             
             # create iterative datasets as data loaders
-            dataloader_train = initialize_dataloader(
+            data_loader_train = initialize_dataloader(
                 data_source=source_train,
                 num_epochs=cfg.training.num_epochs - start_epoch_id + 1,
                 shuffle=True,
-                seed=random.randint(a=0, b=255),
+                seed=cfg.training.seed,
                 batch_size=cfg.training.batch_size,
                 crop_size=cfg.hparams.crop_size,
                 resize=cfg.hparams.resize,
                 mean=cfg.hparams.mean,
+                p_flip=cfg.hparams.prob_random_flip,
                 std=cfg.hparams.std,
                 num_workers=cfg.data_loading.num_workers,
                 num_threads=cfg.data_loading.num_threads,
                 prefetch_size=cfg.data_loading.prefetch_size
             )
-            dataloader_train = iter(dataloader_train)
+            data_loader_train = iter(data_loader_train)
 
-            dataloader_test = initialize_dataloader(
+            data_loader_test = initialize_dataloader(
                 data_source=source_test,
-                num_epochs=1,
+                num_epochs=cfg.training.num_epochs - start_epoch_id + 1,
                 shuffle=False,
-                seed=random.randint(a=0, b=10_000),
+                seed=cfg.training.seed,
                 batch_size=cfg.training.batch_size,
                 crop_size=cfg.hparams.crop_size,
                 resize=cfg.hparams.resize,
                 mean=cfg.hparams.mean,
                 std=cfg.hparams.std,
-                p_hflip=None,
+                p_flip=None,
                 is_color_img=True,
                 num_workers=cfg.data_loading.num_workers,
                 num_threads=cfg.data_loading.num_threads,
                 prefetch_size=cfg.data_loading.prefetch_size
             )
+            data_loader_test = iter(data_loader_test)
 
             for epoch_id in tqdm(
                 iterable=range(start_epoch_id, cfg.training.num_epochs, 1),
@@ -487,7 +487,7 @@ def main(cfg: DictConfig) -> None:
                 disable=not cfg.data_loading.progress_bar
             ):
                 state, loss = train(
-                    data_loader=dataloader_train,
+                    data_loader=data_loader_train,
                     state=state,
                     cfg=cfg
                 )
@@ -496,7 +496,7 @@ def main(cfg: DictConfig) -> None:
                 ckpt_mngr.wait_until_finished()
 
                 accuracy, coverage, clf_accuracy = evaluate(
-                    dataloader=dataloader_test,
+                    data_loader=data_loader_test,
                     state=state,
                     cfg=cfg
                 )

@@ -22,8 +22,7 @@ training:
   weight_decay: 0.0005
 
 hparams:
-  prob_random_h_flip: 0.5
-  dirichlet_concentration: 1.
+  prob_random_flip: 0.5
 
 data_loading:
   progress_bar: True

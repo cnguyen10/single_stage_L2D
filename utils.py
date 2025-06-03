@@ -7,6 +7,7 @@ from transformations import (
     RandomCrop,
     Resize,
     RandomHorizontalFlip,
+    RandomVerticalFlip,
     ToRGB,
     Normalize,
     ToFloat
@@ -24,8 +25,8 @@ def init_tx(
 ) -> optax.GradientTransformationExtraArgs:
     """initialize parameters of an optimizer
     """
-    # add L2 regularisation(aka weight decay)
-    weight_decay = optax.masked(
+    # add L2 regularization(aka weight decay)
+    l2_regularization = optax.masked(
         inner=optax.add_decayed_weights(
             weight_decay=weight_decay,
             mask=None
@@ -41,14 +42,13 @@ def init_tx(
 
     # define an optimizer
     tx = optax.chain(
-        weight_decay,
+        l2_regularization,
         optax.clip_by_global_norm(max_norm=clipped_norm) \
             if clipped_norm is not None else optax.identity(),
         optax.sgd(learning_rate=lr_schedule_fn, momentum=momentum)
     )
 
     return tx
-
 
 
 def initialize_dataloader(
@@ -61,7 +61,7 @@ def initialize_dataloader(
     resize: tuple[int, int] = None,
     mean: float = None,
     std: float = None,
-    p_hflip: float = None,
+    p_flip: float = None,
     is_color_img: bool = True,
     num_workers: int = 0,
     num_threads: int = 1,
@@ -85,8 +85,9 @@ def initialize_dataloader(
     if crop_size is not None:
         transformations.append(RandomCrop(crop_size=crop_size))
 
-    if p_hflip is not None:
-        transformations.append(RandomHorizontalFlip(p=p_hflip))
+    if p_flip is not None:
+        transformations.append(RandomHorizontalFlip(p=p_flip))
+        transformations.append(RandomVerticalFlip(p=p_flip))
 
     if not is_color_img:
         transformations.append(ToRGB())

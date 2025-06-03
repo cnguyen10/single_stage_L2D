@@ -33,7 +33,6 @@ class RandomCrop(grain.RandomMapTransform):
         seed = rng.integers(low=0, high=INT_MAX)
         rand_crop = A.Compose(
             transforms=[
-                A.Pad(padding=[4, 4]),
                 A.RandomCrop(
                     height=self.crop_size[0],
                     width=self.crop_size[1]
@@ -55,6 +54,22 @@ class RandomHorizontalFlip(grain.RandomMapTransform):
         seed = rng.integers(low=0, high=INT_MAX)
         random_hflip = A.Compose(
             transforms=[A.HorizontalFlip(p=self.p),],
+            seed=seed
+        )
+        element['image'] = random_hflip(image=element['image'])['image']
+
+        return element
+
+
+class RandomVerticalFlip(grain.RandomMapTransform):
+    def __init__(self, p: float) -> None:
+        super().__init__()
+        self.p = p
+
+    def random_map(self, element: dict[str, Any], rng: np.random.Generator) -> dict[str, Any]:
+        seed = rng.integers(low=0, high=INT_MAX)
+        random_hflip = A.Compose(
+            transforms=[A.VerticalFlip(p=self.p),],
             seed=seed
         )
         element['image'] = random_hflip(image=element['image'])['image']
