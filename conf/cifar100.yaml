@@ -2,38 +2,39 @@ dataset:
   name: cifar100
   root: /sda2/datasets/cifar100/ciFAIR-100
   num_classes: 100
-  noise_rate: 0.7
+  noise_rate: 0.3
   train_files:
-    - ${dataset.root}/synthetic_experts_3/train_0_1_2_3_4_5_6_7_8_9_${dataset.noise_rate}_2.json
-    # - ${dataset.root}/synthetic_experts_3/train_0_1_2_3_4_5_6_7_8_9_${dataset.noise_rate}_3.json
-    - ${dataset.root}/synthetic_experts_3/train_5_6_7_8_9_10_11_12_13_14_${dataset.noise_rate}_4.json
-    # - ${dataset.root}/synthetic_experts_3/train_5_6_7_8_9_10_11_12_13_14_${dataset.noise_rate}_5.json
-    - ${dataset.root}/synthetic_experts_3/train_10_11_12_13_14_15_16_17_18_19_${dataset.noise_rate}_0.json
-    # - ${dataset.root}/synthetic_experts_3/train_10_11_12_13_14_15_16_17_18_19_${dataset.noise_rate}_1.json
+    - ${dataset.root}/synthetic_experts_3/train_0_1_2_3_4_5_6_7_8_9_${dataset.noise_rate}_44.json
+    - ${dataset.root}/synthetic_experts_3/train_5_6_7_8_9_10_11_12_13_14_${dataset.noise_rate}_44.json
+    - ${dataset.root}/synthetic_experts_3/train_10_11_12_13_14_15_16_17_18_19_${dataset.noise_rate}_44.json
   train_ground_truth_file: ${dataset.root}/train.json
   test_files:
-    - ${dataset.root}/synthetic_experts_3/test_0_1_2_3_4_5_6_7_8_9_${dataset.noise_rate}_2.json
-    # - ${dataset.root}/synthetic_experts_3/test_0_1_2_3_4_5_6_7_8_9_${dataset.noise_rate}_3.json
-    - ${dataset.root}/synthetic_experts_3/test_5_6_7_8_9_10_11_12_13_14_${dataset.noise_rate}_4.json
-    # - ${dataset.root}/synthetic_experts_3/test_5_6_7_8_9_10_11_12_13_14_${dataset.noise_rate}_5.json
-    - ${dataset.root}/synthetic_experts_3/test_10_11_12_13_14_15_16_17_18_19_${dataset.noise_rate}_0.json
-    # - ${dataset.root}/synthetic_experts_3/test_10_11_12_13_14_15_16_17_18_19_${dataset.noise_rate}_1.json
+    - ${dataset.root}/synthetic_experts_3/test_0_1_2_3_4_5_6_7_8_9_${dataset.noise_rate}_44.json
+    - ${dataset.root}/synthetic_experts_3/test_5_6_7_8_9_10_11_12_13_14_${dataset.noise_rate}_44.json
+    - ${dataset.root}/synthetic_experts_3/test_10_11_12_13_14_15_16_17_18_19_${dataset.noise_rate}_44.json
   test_ground_truth_file: ${dataset.root}/test.json
+
+data_augmentation:
+  resize: null
+  padding_px: 4
+  crop_size: [32, 32]
+  prob_random_flip: 0.5
+  mean: null
+  std: null
 
 model:
   _partial_: True
-  _target_: models.PreActResNet.ResNet18
+  _target_: models.ResNet.PreActResNet18
+  in_channels: 3  # color images: 3, black and white: 1
+  conv1_kernel_size: [3, 3]
 
 training:
-  lr: 0.1
+  lr: 0.01
   batch_size: 128
-  num_epochs: 100
-  clipped_norm: 1
+  num_epochs: 300
+  clipped_norm: 10
+  num_samples: null
   loss_fn: softmax
 
 hparams:
-  resize: [36, 36]
-  crop_size: [32, 32]
-  mean: null
-  std: null
   dirichlet_concentration: [1., 1., 1., 1.]

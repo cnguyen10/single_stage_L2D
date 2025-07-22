@@ -16,10 +16,10 @@ experiment:
   run_id: null
 
 training:
-  num_samples: null
-  seed: 44
   momentum: 0.9
   weight_decay: 0.0005
+  dropout_rate: 0.1
+  seed: 0
 
 hparams:
   prob_random_flip: 0.5

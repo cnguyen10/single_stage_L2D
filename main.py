@@ -93,7 +93,7 @@ def softmax_loss_fn(
     model: nnx.Module,
     x: jax.Array,
     y_augmented: jax.Array
-) -> tuple[jax.Array, jax.Array]:
+) -> jax.Array:
     """calculate the loss of the single-staged L2D with softmax
     """
     logits = model(x)
@@ -215,10 +215,10 @@ def train_step(
 
 
 def train(
-    data_loader: grain.DatasetIterator,
+    dataloader: grain.DatasetIterator,
     state: nnx.Optimizer,
     cfg: DictConfig
-) -> tuple[nnx.Optimizer, float]:
+) -> tuple[nnx.Optimizer, jax.Array]:
     """
     """
     # metric to track the training loss
@@ -233,9 +233,9 @@ def train(
         colour='blue',
         disable=not cfg.data_loading.progress_bar
     ):
-        samples = next(data_loader)
+        samples = next(dataloader)
 
-        x = jnp.asarray(a=samples['image'], dtype=jnp.float32)  # input samples
+        x = jnp.asarray(a=samples['image'], dtype=jnp.bfloat16)  # input samples
         y = jnp.asarray(a=samples['ground_truth'], dtype=jnp.int32)  # true int labels  (batch,)
         t = jnp.asarray(a=samples['label'], dtype=jnp.int32)  # annotated int labels (batch, num_experts)
 
@@ -266,10 +266,10 @@ def train(
 
 
 def evaluate(
-    data_loader: grain.DatasetIterator,
+    dataloader: grain.DataLoader,
     state: nnx.Optimizer,
     cfg: DictConfig
-) -> tuple[float, float, float]:
+) -> tuple[jax.Array, jax.Array, jax.Array]:
     """
     """
     accuracy_accum = metrics.Accuracy()
@@ -278,8 +278,9 @@ def evaluate(
 
     state.model.eval()
 
-    for _ in tqdm(
-        iterable=range(cfg.dataset.length.test//cfg.training.batch_size),
+    for samples in tqdm(
+        iterable=dataloader,
+        total=cfg.dataset.length.test//cfg.training.batch_size + 1,
         desc='evaluate',
         ncols=80,
         leave=False,
@@ -287,7 +288,6 @@ def evaluate(
         colour='blue',
         disable=not cfg.data_loading.progress_bar
     ):
-        samples = next(data_loader)
         x = jnp.asarray(a=samples['image'], dtype=jnp.float32)  # input samples
         y = jnp.asarray(a=samples['ground_truth'], dtype=jnp.int32)  # true labels (batch,)
         t = jnp.asarray(a=samples['label'], dtype=jnp.int32)  # annotated labels (batch, num_experts)
@@ -361,6 +361,7 @@ def main(cfg: DictConfig) -> None:
     model = hydra.utils.instantiate(config=cfg.model)(
         num_classes=cfg.dataset.num_classes + len(cfg.dataset.train_files),
         rngs=nnx.Rngs(jax.random.PRNGKey(seed=cfg.training.seed)),
+        dropout_rate=cfg.training.dropout_rate,
         dtype=eval(cfg.jax.dtype)
     )
 
@@ -442,40 +443,41 @@ def main(cfg: DictConfig) -> None:
                 del checkpoint
             
             # create iterative datasets as data loaders
-            data_loader_train = initialize_dataloader(
+            dataloader_train = initialize_dataloader(
                 data_source=source_train,
                 num_epochs=cfg.training.num_epochs - start_epoch_id + 1,
                 shuffle=True,
                 seed=cfg.training.seed,
                 batch_size=cfg.training.batch_size,
-                crop_size=cfg.hparams.crop_size,
-                resize=cfg.hparams.resize,
-                mean=cfg.hparams.mean,
-                p_flip=cfg.hparams.prob_random_flip,
-                std=cfg.hparams.std,
+                resize=cfg.data_augmentation.resize,
+                padding_px=cfg.data_augmentation.padding_px,
+                crop_size=cfg.data_augmentation.crop_size,
+                mean=cfg.data_augmentation.mean,
+                std=cfg.data_augmentation.std,
+                p_flip=cfg.data_augmentation.prob_random_flip,
                 num_workers=cfg.data_loading.num_workers,
                 num_threads=cfg.data_loading.num_threads,
                 prefetch_size=cfg.data_loading.prefetch_size
             )
-            data_loader_train = iter(data_loader_train)
+            dataloader_train = iter(dataloader_train)
 
-            data_loader_test = initialize_dataloader(
+            dataloader_test = initialize_dataloader(
                 data_source=source_test,
-                num_epochs=cfg.training.num_epochs - start_epoch_id + 1,
+                num_epochs=1,
                 shuffle=False,
-                seed=cfg.training.seed,
+                seed=0,
                 batch_size=cfg.training.batch_size,
-                crop_size=cfg.hparams.crop_size,
-                resize=cfg.hparams.resize,
-                mean=cfg.hparams.mean,
-                std=cfg.hparams.std,
+                resize=cfg.data_augmentation.crop_size,
+                padding_px=None,
+                crop_size=None,
+                mean=cfg.data_augmentation.mean,
+                std=cfg.data_augmentation.std,
                 p_flip=None,
                 is_color_img=True,
                 num_workers=cfg.data_loading.num_workers,
                 num_threads=cfg.data_loading.num_threads,
                 prefetch_size=cfg.data_loading.prefetch_size
             )
-            data_loader_test = iter(data_loader_test)
 
             for epoch_id in tqdm(
                 iterable=range(start_epoch_id, cfg.training.num_epochs, 1),
@@ -487,7 +489,7 @@ def main(cfg: DictConfig) -> None:
                 disable=not cfg.data_loading.progress_bar
             ):
                 state, loss = train(
-                    data_loader=data_loader_train,
+                    dataloader=dataloader_train,
                     state=state,
                     cfg=cfg
                 )
@@ -496,7 +498,7 @@ def main(cfg: DictConfig) -> None:
                 ckpt_mngr.wait_until_finished()
 
                 accuracy, coverage, clf_accuracy = evaluate(
-                    data_loader=data_loader_test,
+                    dataloader=dataloader_test,
                     state=state,
                     cfg=cfg
                 )
