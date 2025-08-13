@@ -41,12 +41,18 @@ def augment_labels(y: jax.Array, t: jax.Array, num_classes: int) -> jax.Array:
     Return:
         y_augmented:
     """
-    y_one_hot = jax.nn.one_hot(x=y, num_classes=num_classes)  # (batch, num_classes)
-    
+    y_one_hot = jax.nn.one_hot(
+        x=y,
+        num_classes=num_classes
+    )  # (batch, num_classes)
+
     # binary flag of expert's predictions
     y_orthogonal = (t == y[:, None]) * 1  # (batch, num_experts)
 
-    y_augmented = jnp.concatenate(arrays=(y_one_hot, y_orthogonal), axis=-1)  # (batch, num_classes + num_experts)
+    y_augmented = jnp.concatenate(
+        arrays=(y_one_hot, y_orthogonal),
+        axis=-1
+    )  # (batch, num_classes + num_experts)
 
     return y_augmented
 
@@ -58,15 +64,17 @@ def calculate_loss_dirichlet_prior(
     num_classes: int,
     dirichlet_concentration: list[float]
 ) -> jax.Array:
-    """calculate the prior imposed on the prediction of the classifier. The purpose of
-    the prior loss is to control the coverage by changing the Dirichlet concentration
+    """calculate the prior imposed on the prediction of the classifier.
+    The purpose of the prior loss is to control the coverage by changing
+    the Dirichlet concentration
 
     Args:
-        model: the 'unified' model whose output consists of the prediction of the
-    classifier and the correction of human experts.
+        model: the 'unified' model whose output consists of the prediction of
+            the classifier and the correction of human experts.
         x: the input samples
         num_classes: the number of classes in the classification task
-        dirichlet_concentration: a (num_experts + 1)-dimensional positive vector
+        dirichlet_concentration: a (num_experts + 1)-dimensional positive
+            vector
 
     Returns:
         loss_prior:
@@ -98,7 +106,10 @@ def softmax_loss_fn(
     """
     logits = model(x)
 
-    loss = optax.losses.softmax_cross_entropy(logits=logits, labels=y_augmented)
+    loss = optax.losses.softmax_cross_entropy(
+        logits=logits,
+        labels=y_augmented
+    )
     loss = jnp.mean(a=loss, axis=0)
 
     return loss
@@ -147,9 +158,9 @@ def loss_fn(
     Args:
         model: the 'unified" model
         x: input samples
-        y_augmented: the first num_classes elements corresponds to the ground truth
-    label to train the classifier, while the remainings correspond to the correction
-    of each human expert
+        y_augmented: the first num_classes elements corresponds to the ground
+            truth label to train the classifier, while the remainings
+            correspond to the correction of each human expert
         which_loss: either 'softmax_loss_fn' or 'one_vs_all'
         num_classes:
         dirichlet_concentration:
@@ -160,7 +171,11 @@ def loss_fn(
     """
     match which_loss:
         case 'softmax':
-            loss_defer = softmax_loss_fn(model=model, x=x, y_augmented=y_augmented)
+            loss_defer = softmax_loss_fn(
+                model=model,
+                x=x,
+                y_augmented=y_augmented
+            )
             loss_prior = calculate_loss_dirichlet_prior(
                 model=model,
                 x=x,
@@ -168,12 +183,16 @@ def loss_fn(
                 dirichlet_concentration=dirichlet_concentration
             )
             loss = loss_defer + (len(x) / dataset_length) * loss_prior
-        
+
         case 'one_vs_all':
             loss = one_vs_all(model=model, x=x, y_augmented=y_augmented)
 
         case _:
-            raise ValueError(f'The loss function must be either \'softmax\' or \'one_vs_all\'. Found {which_loss}')
+            raise ValueError(' '.join((
+                'The loss function must be either',
+                '\'softmax\' or \'one_vs_all\'.'
+                f'Found {which_loss}'
+            )))
 
     return loss
 
@@ -235,9 +254,18 @@ def train(
     ):
         samples = next(dataloader)
 
-        x = jnp.asarray(a=samples['image'], dtype=jnp.bfloat16)  # input samples
-        y = jnp.asarray(a=samples['ground_truth'], dtype=jnp.int32)  # true int labels  (batch,)
-        t = jnp.asarray(a=samples['label'], dtype=jnp.int32)  # annotated int labels (batch, num_experts)
+        x = jnp.asarray(
+            a=samples['image'],
+            dtype=eval(cfg.jax.dtype)
+        )  # input samples
+        y = jnp.asarray(
+            a=samples['ground_truth'],
+            dtype=jnp.int32
+        )  # true int labels  (batch,)
+        t = jnp.asarray(
+            a=samples['label'],
+            dtype=jnp.int32
+        )  # annotated int labels (batch, num_experts)
 
         # augmented labels
         y_augmented = augment_labels(
@@ -288,17 +316,34 @@ def evaluate(
         colour='blue',
         disable=not cfg.data_loading.progress_bar
     ):
-        x = jnp.asarray(a=samples['image'], dtype=jnp.float32)  # input samples
-        y = jnp.asarray(a=samples['ground_truth'], dtype=jnp.int32)  # true labels (batch,)
-        t = jnp.asarray(a=samples['label'], dtype=jnp.int32)  # annotated labels (batch, num_experts)
+        x = jnp.asarray(
+            a=samples['image'],
+            dtype=jnp.float32
+        )  # input samples
+        y = jnp.asarray(
+            a=samples['ground_truth'],
+            dtype=jnp.int32
+        )  # true labels (batch,)
+
+        # annotated labels (batch, num_experts)
+        t = jnp.asarray(a=samples['label'], dtype=jnp.int32)
 
         logits = state.model(x)  # (batch, num_classes + num_experts)
 
         # classifier predictions
-        clf_predictions = jnp.argmax(a=logits[:, :cfg.dataset.num_classes], axis=-1)  # (batch,)
-        clf_accuracy_accum.update(logits=logits[:, :cfg.dataset.num_classes], labels=y)
+        clf_predictions = jnp.argmax(
+            a=logits[:, :cfg.dataset.num_classes],
+            axis=-1
+        )  # (batch,)
+        clf_accuracy_accum.update(
+            logits=logits[:, :cfg.dataset.num_classes],
+            labels=y
+        )
 
-        labels_concatenated = jnp.concatenate(arrays=(t, clf_predictions[:, None]), axis=-1)  # (batch, num_experts + 1)
+        labels_concatenated = jnp.concatenate(
+            arrays=(t, clf_predictions[:, None]),
+            axis=-1
+        )  # (batch, num_experts + 1)
 
         logits_max_id = jnp.argmax(a=logits, axis=-1)  # (batch,)
         logits_max_id = logits_max_id - cfg.dataset.num_classes
@@ -306,19 +351,33 @@ def evaluate(
         # which samples are predicted by classifier
         samples_predicted_by_clf = (logits_max_id < 0) * 1  # (batch,)
 
-        # which samples are deferred to which experts
-        sample_expert_id = logits_max_id * (1 - samples_predicted_by_clf)  # (batch,)
+        # which samples are deferred to which experts  # (batch,)
+        sample_expert_id = logits_max_id * (1 - samples_predicted_by_clf)
 
-        selected_expert_ids = samples_predicted_by_clf * len(cfg.dataset.test_files) + sample_expert_id  # (batch,)
+        selected_expert_ids = sample_expert_id\
+            + samples_predicted_by_clf * len(cfg.dataset.test_files)
 
         coverage.update(values=samples_predicted_by_clf)
 
         # system's predictions
-        y_predicted = labels_concatenated[jnp.arange(y.shape[0]), selected_expert_ids]
+        y_predicted = labels_concatenated[
+            jnp.arange(y.shape[0]),
+            selected_expert_ids
+        ]
 
-        accuracy_accum.update(logits=jax.nn.one_hot(x=y_predicted, num_classes=cfg.dataset.num_classes), labels=y)
+        accuracy_accum.update(
+            logits=jax.nn.one_hot(
+                x=y_predicted,
+                num_classes=cfg.dataset.num_classes
+            ),
+            labels=y
+        )
 
-    return (accuracy_accum.compute(), coverage.compute(), clf_accuracy_accum.compute())
+    return (
+        accuracy_accum.compute(),
+        coverage.compute(),
+        clf_accuracy_accum.compute()
+    )
 
 
 @hydra.main(version_base=None, config_path='conf', config_name='conf')
@@ -403,123 +462,121 @@ def main(cfg: DictConfig) -> None:
 
     # enable mlflow tracking
     with mlflow.start_run(
-        run_id=cfg.experiment.run_id,
-        log_system_metrics=False
-    ) as mlflow_run:
-        # append run id into the artifact path
-        ckpt_dir = os.path.join(
-            os.getcwd(),
-            cfg.experiment.logdir,
-            cfg.experiment.name,
-            mlflow_run.info.run_id
+            run_id=cfg.experiment.run_id,
+            log_system_metrics=False) as mlflow_run, \
+        ocp.CheckpointManager(
+            directory=os.path.join(
+                os.getcwd(),
+                cfg.experiment.logdir,
+                cfg.experiment.name,
+                mlflow_run.info.run_id
+            ),
+            options=ckpt_options) as ckpt_mngr:
+        if cfg.experiment.run_id is None:
+            # log hyper-parameters
+            mlflow.log_params(
+                params=flatten_dict(
+                    xs=OmegaConf.to_container(cfg=cfg),
+                    sep='.')
+            )
+
+            # log source code
+            mlflow.log_artifact(
+                local_path=os.path.abspath(path=__file__),
+                artifact_path='source_code'
+            )
+
+            start_epoch_id = 0
+        else:
+            start_epoch_id = ckpt_mngr.latest_step()
+
+            checkpoint = ckpt_mngr.restore(
+                step=start_epoch_id,
+                args=ocp.args.StandardRestore(item=nnx.state(state.model))
+            )
+
+            nnx.update(state.model, checkpoint)
+
+            del checkpoint
+
+        # create iterative datasets as data loaders
+        dataloader_train = initialize_dataloader(
+            data_source=source_train,
+            num_epochs=cfg.training.num_epochs - start_epoch_id + 1,
+            shuffle=True,
+            seed=cfg.training.seed,
+            batch_size=cfg.training.batch_size,
+            resize=cfg.data_augmentation.resize,
+            padding_px=cfg.data_augmentation.padding_px,
+            crop_size=cfg.data_augmentation.crop_size,
+            mean=cfg.data_augmentation.mean,
+            std=cfg.data_augmentation.std,
+            p_flip=cfg.data_augmentation.prob_random_flip,
+            num_workers=cfg.data_loading.num_workers,
+            num_threads=cfg.data_loading.num_threads,
+            prefetch_size=cfg.data_loading.prefetch_size
+        )
+        dataloader_train = iter(dataloader_train)
+
+        dataloader_test = initialize_dataloader(
+            data_source=source_test,
+            num_epochs=1,
+            shuffle=False,
+            seed=0,
+            batch_size=cfg.training.batch_size,
+            resize=cfg.data_augmentation.crop_size,
+            padding_px=None,
+            crop_size=None,
+            mean=cfg.data_augmentation.mean,
+            std=cfg.data_augmentation.std,
+            p_flip=None,
+            is_color_img=True,
+            num_workers=cfg.data_loading.num_workers,
+            num_threads=cfg.data_loading.num_threads,
+            prefetch_size=cfg.data_loading.prefetch_size
         )
 
-        # enable an orbax checkpoint manager to save model's parameters
-        with ocp.CheckpointManager(directory=ckpt_dir, options=ckpt_options) as ckpt_mngr:
-
-            if cfg.experiment.run_id is None:
-                # log hyper-parameters
-                mlflow.log_params(
-                    params=flatten_dict(xs=OmegaConf.to_container(cfg=cfg), sep='.')
-                )
-
-                # log source code
-                mlflow.log_artifact(
-                    local_path=os.path.abspath(path=__file__),
-                    artifact_path='source_code'
-                )
-
-                start_epoch_id = 0
-            else:
-                start_epoch_id = ckpt_mngr.latest_step()
-
-                checkpoint = ckpt_mngr.restore(
-                    step=start_epoch_id,
-                    args=ocp.args.StandardRestore(item=nnx.state(state.model))
-                )
-
-                nnx.update(state.model, checkpoint)
-
-                del checkpoint
-            
-            # create iterative datasets as data loaders
-            dataloader_train = initialize_dataloader(
-                data_source=source_train,
-                num_epochs=cfg.training.num_epochs - start_epoch_id + 1,
-                shuffle=True,
-                seed=cfg.training.seed,
-                batch_size=cfg.training.batch_size,
-                resize=cfg.data_augmentation.resize,
-                padding_px=cfg.data_augmentation.padding_px,
-                crop_size=cfg.data_augmentation.crop_size,
-                mean=cfg.data_augmentation.mean,
-                std=cfg.data_augmentation.std,
-                p_flip=cfg.data_augmentation.prob_random_flip,
-                num_workers=cfg.data_loading.num_workers,
-                num_threads=cfg.data_loading.num_threads,
-                prefetch_size=cfg.data_loading.prefetch_size
-            )
-            dataloader_train = iter(dataloader_train)
-
-            dataloader_test = initialize_dataloader(
-                data_source=source_test,
-                num_epochs=1,
-                shuffle=False,
-                seed=0,
-                batch_size=cfg.training.batch_size,
-                resize=cfg.data_augmentation.crop_size,
-                padding_px=None,
-                crop_size=None,
-                mean=cfg.data_augmentation.mean,
-                std=cfg.data_augmentation.std,
-                p_flip=None,
-                is_color_img=True,
-                num_workers=cfg.data_loading.num_workers,
-                num_threads=cfg.data_loading.num_threads,
-                prefetch_size=cfg.data_loading.prefetch_size
+        for epoch_id in tqdm(
+            iterable=range(start_epoch_id, cfg.training.num_epochs, 1),
+            desc='progress',
+            ncols=80,
+            leave=True,
+            position=1,
+            colour='green',
+            disable=not cfg.data_loading.progress_bar
+        ):
+            state, loss = train(
+                dataloader=dataloader_train,
+                state=state,
+                cfg=cfg
             )
 
-            for epoch_id in tqdm(
-                iterable=range(start_epoch_id, cfg.training.num_epochs, 1),
-                desc='progress',
-                ncols=80,
-                leave=True,
-                position=1,
-                colour='green',
-                disable=not cfg.data_loading.progress_bar
-            ):
-                state, loss = train(
-                    dataloader=dataloader_train,
-                    state=state,
-                    cfg=cfg
-                )
+            # wait for the asynchronous saving
+            ckpt_mngr.wait_until_finished()
 
-                # wait for checkpoint manager completing the asynchronous saving
-                ckpt_mngr.wait_until_finished()
+            accuracy, coverage, clf_accuracy = evaluate(
+                dataloader=dataloader_test,
+                state=state,
+                cfg=cfg
+            )
 
-                accuracy, coverage, clf_accuracy = evaluate(
-                    dataloader=dataloader_test,
-                    state=state,
-                    cfg=cfg
-                )
-                
-                logged_metrics = dict(
-                    loss=loss,
-                    accuracy=accuracy,
-                    coverage=coverage,
-                    clf_accuracy=clf_accuracy
-                )
-                mlflow.log_metrics(
-                    metrics=logged_metrics,
-                    step=epoch_id + 1,
-                    synchronous=False
-                )
+            logged_metrics = dict(
+                loss=loss,
+                accuracy=accuracy,
+                coverage=coverage,
+                clf_accuracy=clf_accuracy
+            )
+            mlflow.log_metrics(
+                metrics=logged_metrics,
+                step=epoch_id + 1,
+                synchronous=False
+            )
 
-                # save checkpoint
-                ckpt_mngr.save(
-                    step=epoch_id + 1,
-                    args=ocp.args.StandardSave(nnx.state(state.model))
-                )
+            # save checkpoint
+            ckpt_mngr.save(
+                step=epoch_id + 1,
+                args=ocp.args.StandardSave(nnx.state(state.model))
+            )
     return None
 
 
