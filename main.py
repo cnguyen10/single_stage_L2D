@@ -209,17 +209,18 @@ def loss_fn(
 def train_step(
     x: jax.Array,
     y_augmented: jax.Array,
+    model: nnx.Module,
     optimizer: nnx.Optimizer,
     which_loss: str,
     num_classes: int,
     dirichlet_concentration: list[float],
     dataset_length: int
-) -> tuple[nnx.Optimizer, jax.Array]:
+) -> tuple[nnx.Module, nnx.Optimizer, jax.Array]:
     """
     """
     grad_value_fn = nnx.value_and_grad(f=loss_fn, argnums=0)
     loss, grads = grad_value_fn(
-        optimizer.model,
+        model,
         x,
         y_augmented,
         which_loss,
@@ -228,20 +229,23 @@ def train_step(
         dataset_length
     )
 
-    optimizer.update(grads=grads)
+    optimizer.update(model=model, grads=grads)
 
-    return (optimizer, loss)
+    return (model, optimizer, loss)
 
 
 def train(
     dataloader: grain.DatasetIterator,
-    state: nnx.Optimizer,
+    model: nnx.Module,
+    optimizer: nnx.Optimizer,
     cfg: DictConfig
-) -> tuple[nnx.Optimizer, jax.Array]:
+) -> tuple[nnx.Module, nnx.Optimizer, jax.Array]:
     """
     """
     # metric to track the training loss
     loss_accum = metrics.Average()
+
+    model.train()
 
     for _ in tqdm(
         iterable=range(cfg.dataset.length.train // cfg.training.batch_size),
@@ -274,10 +278,11 @@ def train(
             num_classes=cfg.dataset.num_classes
         )
 
-        state, loss = train_step(
+        model, optimizer, loss = train_step(
             x=x,
             y_augmented=y_augmented,
-            optimizer=state,
+            model=model,
+            optimizer=optimizer,
             which_loss=cfg.training.loss_fn,
             num_classes=cfg.dataset.num_classes,
             dirichlet_concentration=cfg.hparams.dirichlet_concentration,
@@ -290,12 +295,12 @@ def train(
         # tracking
         loss_accum.update(values=loss)
 
-    return state, loss_accum.compute()
+    return model, optimizer, loss_accum.compute()
 
 
 def evaluate(
     dataloader: grain.DataLoader,
-    state: nnx.Optimizer,
+    model: nnx.Module,
     cfg: DictConfig
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
     """
@@ -304,7 +309,7 @@ def evaluate(
     coverage = metrics.Average()
     clf_accuracy_accum = metrics.Accuracy()
 
-    state.model.eval()
+    model.eval()
 
     for samples in tqdm(
         iterable=dataloader,
@@ -328,7 +333,7 @@ def evaluate(
         # annotated labels (batch, num_experts)
         t = jnp.asarray(a=samples['label'], dtype=jnp.int32)
 
-        logits = state.model(x)  # (batch, num_classes + num_experts)
+        logits = model(x)  # (batch, num_classes + num_experts)
 
         # classifier predictions
         clf_predictions = jnp.argmax(
@@ -382,6 +387,8 @@ def evaluate(
 
 @hydra.main(version_base=None, config_path='conf', config_name='conf')
 def main(cfg: DictConfig) -> None:
+    """
+    """
     jax.config.update('jax_disable_jit', cfg.jax.disable_jit)
     jax.config.update('jax_platforms', cfg.jax.platform)
 
@@ -424,7 +431,7 @@ def main(cfg: DictConfig) -> None:
         dtype=eval(cfg.jax.dtype)
     )
 
-    state = nnx.Optimizer(
+    optimizer = nnx.Optimizer(
         model=model,
         tx=init_tx(
             dataset_length=len(source_train),
@@ -433,11 +440,11 @@ def main(cfg: DictConfig) -> None:
             num_epochs=cfg.training.num_epochs,
             weight_decay=cfg.training.weight_decay,
             momentum=cfg.training.momentum,
-            clipped_norm=cfg.training.clipped_norm
-        )
+            clipped_norm=cfg.training.clipped_norm,
+            key=cfg.training.seed
+        ),
+        wrt=nnx.Param
     )
-
-    del model
     # endregion
 
     # options to store models
@@ -452,8 +459,6 @@ def main(cfg: DictConfig) -> None:
     mlflow.set_tracking_uri(uri=cfg.experiment.tracking_uri)
     mlflow.set_experiment(experiment_name=cfg.experiment.name)
     mlflow.disable_system_metrics_logging()
-    # mlflow.set_system_metrics_sampling_interval(interval=600)
-    # mlflow.set_system_metrics_samples_before_logging(samples=1)
 
     # create a directory for storage (if not existed)
     if not os.path.exists(path=cfg.experiment.logdir):
@@ -492,10 +497,10 @@ def main(cfg: DictConfig) -> None:
 
             checkpoint = ckpt_mngr.restore(
                 step=start_epoch_id,
-                args=ocp.args.StandardRestore(item=nnx.state(state.model))
+                args=ocp.args.StandardRestore(item=nnx.state(model))
             )
 
-            nnx.update(state.model, checkpoint)
+            nnx.update(model, checkpoint)
 
             del checkpoint
 
@@ -545,9 +550,10 @@ def main(cfg: DictConfig) -> None:
             colour='green',
             disable=not cfg.data_loading.progress_bar
         ):
-            state, loss = train(
+            model, optimizer, loss = train(
                 dataloader=dataloader_train,
-                state=state,
+                model=model,
+                optimizer=optimizer,
                 cfg=cfg
             )
 
@@ -556,7 +562,7 @@ def main(cfg: DictConfig) -> None:
 
             accuracy, coverage, clf_accuracy = evaluate(
                 dataloader=dataloader_test,
-                state=state,
+                model=model,
                 cfg=cfg
             )
 
@@ -575,7 +581,7 @@ def main(cfg: DictConfig) -> None:
             # save checkpoint
             ckpt_mngr.save(
                 step=epoch_id + 1,
-                args=ocp.args.StandardSave(nnx.state(state.model))
+                args=ocp.args.StandardSave(nnx.state(model))
             )
     return None
 

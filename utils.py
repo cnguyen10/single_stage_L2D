@@ -1,4 +1,5 @@
 import jax
+
 import optax
 
 import grain.python as grain
@@ -21,11 +22,12 @@ def init_tx(
     num_epochs: int,
     weight_decay: float,
     momentum: float,
-    clipped_norm: float
+    clipped_norm: float,
+    key: int
 ) -> optax.GradientTransformationExtraArgs:
     """initialize parameters of an optimizer
     """
-    # add L2 regularization(aka weight decay)
+    # add L2 regularization(a.k.a. weight decay)
     l2_regularization = optax.masked(
         inner=optax.add_decayed_weights(
             weight_decay=weight_decay,
@@ -45,6 +47,7 @@ def init_tx(
         l2_regularization,
         optax.clip_by_global_norm(max_norm=clipped_norm) \
             if clipped_norm is not None else optax.identity(),
+        optax.add_noise(eta=0.01, gamma=0.55, key=key),
         optax.sgd(learning_rate=lr_schedule_fn, momentum=momentum)
     )
 
@@ -57,6 +60,7 @@ def initialize_dataloader(
     shuffle: bool,
     seed: int,
     batch_size: int,
+    drop_remainder: bool = False,
     crop_size: tuple[int, int] | None = None,
     padding_px: int | list[int] | None = None,
     resize: tuple[int, int] | None = None,
@@ -82,7 +86,7 @@ def initialize_dataloader(
 
     if resize is not None:
         transformations.append(Resize(resize_shape=resize))
-    
+
     if padding_px is not None:
         transformations.append(CropAndPad(px=padding_px))
 
@@ -104,7 +108,7 @@ def initialize_dataloader(
     transformations.append(
         grain.Batch(
             batch_size=batch_size,
-            drop_remainder=shuffle
+            drop_remainder=drop_remainder
         )
     )
 
